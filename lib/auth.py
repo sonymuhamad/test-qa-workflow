@@ -26,12 +26,12 @@ class AuthManager:
             password = os.environ[profile["password_secret"]]
 
             response = httpx.post(
-                f"{self.base_url}/auth/login",
+                f"{self.base_url}/admin/auth/login",
                 json={"email": email, "password": password},
             )
             response.raise_for_status()
 
-            token = response.json()["data"]["token"]
+            token = response.json()["data"]["access_token"]
             self._tokens[name] = token
 
     def get_token(self, profile_name: str) -> str:

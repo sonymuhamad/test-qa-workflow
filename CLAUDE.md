@@ -33,7 +33,9 @@ The backend is a Go API using Chi router with PostgreSQL, Redis, and Meilisearch
 
 ## Authentication
 
-**Login endpoint:** POST /auth/login
+**Login endpoint:** `POST /admin/auth/login`
+
+**IMPORTANT:** The path is `/admin/auth/login`, NOT `/auth/login`.
 
 Request:
 ```json
@@ -42,10 +44,21 @@ Request:
 
 Response:
 ```json
-{"data": {"token": "jwt-token-here"}, "meta": {"http_code": 200}}
+{
+  "data": {
+    "id": 191,
+    "name": "sony test",
+    "email": "sony.test2@satudental.com",
+    "access_token": "1c474a8b-92b8-48ca-91a1-355d33b7e0a7",
+    "role_v2": { ... }
+  },
+  "meta": {"http_code": 200}
+}
 ```
 
-Use the token as: `Authorization: Bearer <token>`
+**IMPORTANT:** The token field is `access_token`, NOT `token`.
+
+Use the token as: `Authorization: Bearer <access_token>`
 
 ### Test Accounts
 
@@ -75,6 +88,8 @@ See `test_cases/_schema.yaml` for the full schema reference.
 - Use prerequisites for test data setup (POST to create test data, extract IDs)
 - Always include cleanup to revert staging data
 - Test IDs should be sequential: main tests 1-99, related/regression 100+
+- **Test ordering matters:** Tests execute in ID order. If a test mutates state (e.g., activates a rule), subsequent tests must account for that state change. Place happy-path mutations before conflict checks that depend on the resulting state. Example: activate rule (TC9) → deactivate it back (TC10) → then test "deactivate already inactive" (TC11).
+- **All endpoints are under `/admin/`** — e.g., `/admin/insurance-rules`, `/admin/invoices`
 
 ## How to Generate Test Cases
 

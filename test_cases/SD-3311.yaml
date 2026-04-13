@@ -1,0 +1,153 @@
+ticket: "SD-3311"
+title: "PATCH /admin/insurance-rules/{ID}/status"
+generated_at: "2026-04-13T15:00:00+07:00"
+generated_by: "claude"
+
+auth_profiles:
+  - name: admin
+    email_secret: "QA_ADMIN_EMAIL"
+    password_secret: "QA_ADMIN_PASSWORD"
+
+test_cases:
+  # === Authentication ===
+  - id: 1
+    category: "Auth"
+    description: "No bearer token returns 401"
+    auth: none
+    method: PATCH
+    path: "/admin/insurance-rules/1/status"
+    body:
+      status: "ACTIVE"
+      ordering: 1
+    expected:
+      status_code: 401
+      body_contains:
+        errors:
+          - message: "bearer token needed"
+
+  - id: 2
+    category: "Auth"
+    description: "Invalid bearer token returns 401"
+    auth: invalid
+    method: PATCH
+    path: "/admin/insurance-rules/1/status"
+    body:
+      status: "ACTIVE"
+      ordering: 1
+    expected:
+      status_code: 401
+      body_contains:
+        errors:
+          - message: "bearer token invalid"
+
+  # === Validation ===
+  - id: 3
+    category: "Validation"
+    description: "Empty body returns 400 - status required"
+    auth: admin
+    method: PATCH
+    path: "/admin/insurance-rules/1/status"
+    body: {}
+    expected:
+      status_code: 400
+
+  - id: 4
+    category: "Validation"
+    description: "Invalid status value returns 400"
+    auth: admin
+    method: PATCH
+    path: "/admin/insurance-rules/1/status"
+    body:
+      status: "DELETED"
+    expected:
+      status_code: 400
+
+  - id: 5
+    category: "Validation"
+    description: "Activate without ordering returns 400"
+    auth: admin
+    method: PATCH
+    path: "/admin/insurance-rules/5/status"
+    body:
+      status: "ACTIVE"
+    expected:
+      status_code: 400
+
+  - id: 6
+    category: "Validation"
+    description: "Activate with ordering=0 returns 400"
+    auth: admin
+    method: PATCH
+    path: "/admin/insurance-rules/5/status"
+    body:
+      status: "ACTIVE"
+      ordering: 0
+    expected:
+      status_code: 400
+
+  - id: 7
+    category: "Validation"
+    description: "Non-existent rule ID returns 404"
+    auth: admin
+    method: PATCH
+    path: "/admin/insurance-rules/999999/status"
+    body:
+      status: "ACTIVE"
+      ordering: 1
+    expected:
+      status_code: 404
+
+  # === Status Conflict ===
+  - id: 8
+    category: "Validation"
+    description: "Activate already ACTIVE rule returns 422"
+    auth: admin
+    method: PATCH
+    path: "/admin/insurance-rules/1/status"
+    body:
+      status: "ACTIVE"
+      ordering: 1
+    expected:
+      status_code: 422
+
+  # === Happy Path — Activate then Deactivate ===
+  - id: 9
+    category: "Happy Path"
+    description: "Activate INACTIVE rule with valid ordering"
+    auth: admin
+    method: PATCH
+    path: "/admin/insurance-rules/5/status"
+    body:
+      status: "ACTIVE"
+      ordering: 1
+    expected:
+      status_code: 200
+      body_contains:
+        data:
+          status: "ACTIVE"
+
+  - id: 10
+    category: "Happy Path"
+    description: "Deactivate the rule back to INACTIVE"
+    auth: admin
+    method: PATCH
+    path: "/admin/insurance-rules/5/status"
+    body:
+      status: "INACTIVE"
+    expected:
+      status_code: 200
+      body_contains:
+        data:
+          status: "INACTIVE"
+
+  # === Status Conflict (after deactivate, rule 5 is now INACTIVE) ===
+  - id: 11
+    category: "Validation"
+    description: "Deactivate already INACTIVE rule returns 422"
+    auth: admin
+    method: PATCH
+    path: "/admin/insurance-rules/5/status"
+    body:
+      status: "INACTIVE"
+    expected:
+      status_code: 422
