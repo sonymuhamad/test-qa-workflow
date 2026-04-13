@@ -23,6 +23,8 @@ class TestAPIRunner:
     def test_execute(self, staging_url, auth_manager, prerequisite_vars, evidence, test_case):
         # 1. Build headers
         headers = auth_manager.get_headers(test_case.get("auth", "admin"))
+        if "_skip" in headers:
+            pytest.skip(headers["_skip"])
         headers["Content-Type"] = "application/json"
 
         # 2. Resolve path
