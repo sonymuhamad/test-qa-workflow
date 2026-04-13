@@ -152,7 +152,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Upload to Google Sheets
-        if: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_KEY != '' }}
+        if: env.GOOGLE_SERVICE_ACCOUNT_KEY != ''
         env:
           GOOGLE_SERVICE_ACCOUNT_KEY: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_KEY }}
           QA_SPREADSHEET_ID: ${{ secrets.QA_SPREADSHEET_ID }}
@@ -171,7 +171,7 @@ jobs:
           "
 
       - name: Comment on Jira
-        if: ${{ secrets.JIRA_API_TOKEN != '' }}
+        if: env.JIRA_API_TOKEN != ''
         env:
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
