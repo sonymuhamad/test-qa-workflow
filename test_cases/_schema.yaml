@@ -1,0 +1,75 @@
+# test_cases/_schema.yaml
+# Reference schema for test case YAML files.
+# Claude and humans use this as a template.
+
+# Required top-level fields
+ticket: "SD-XXXX"                          # Jira ticket ID
+title: "METHOD /path/to/endpoint"          # Primary endpoint being tested
+generated_at: "2026-01-01T00:00:00+07:00"  # ISO 8601 timestamp
+generated_by: "claude"                     # "claude" or human name
+
+# Optional: test data setup before test cases run
+prerequisites:
+  - id: "unique_prereq_id"                 # Referenced by $unique_prereq_id in test cases
+    description: "Human-readable description"
+    method: "POST"                         # HTTP method
+    path: "/admin/some-endpoint"           # API path
+    auth: "admin"                          # Auth profile name
+    body:                                  # Request body (optional)
+      field: "value"
+    extract:                               # Extract variables from response
+      variable_name: "$.data.id"           # JSONPath expression
+
+# Auth profiles used by test cases
+auth_profiles:
+  - name: "admin"
+    email_secret: "QA_ADMIN_EMAIL"         # GitHub Actions secret name
+    password_secret: "QA_ADMIN_PASSWORD"
+  - name: "reader"
+    email_secret: "QA_READER_EMAIL"
+    password_secret: "QA_READER_PASSWORD"
+  - name: "no_permission"
+    email_secret: "QA_NOPERM_EMAIL"
+    password_secret: "QA_NOPERM_PASSWORD"
+
+# Test cases
+test_cases:
+  - id: 1                                 # Sequential number
+    category: "Happy Path"                 # Category: Happy Path, Auth, Validation, Edge Case, Regression
+    description: "Short description of what is tested"
+    auth: "admin"                          # Auth profile name, or "none" for unauthenticated
+    method: "GET"                          # HTTP method
+    path: "/admin/endpoint/{param}"        # Path with optional {param} placeholders
+    path_params:                           # Optional: resolve {param} placeholders
+      param: "$variable_name"             # $ prefix references extracted variables
+    query_params:                          # Optional: URL query parameters
+      limit: 10
+    body:                                  # Optional: request body
+      field: "value"
+    expected:
+      status_code: 200                     # Expected HTTP status
+      body_contains:                       # Optional: assert response body contains these keys/values
+        field: "value"
+      body_not_contains:                   # Optional: assert response body does NOT contain
+        field: "value"
+
+# Optional: related endpoints to test (for changed_and_related scope)
+related_endpoints:
+  - path: "GET /admin/related-endpoint"
+    reason: "Why this endpoint might be affected"
+    test_cases:
+      - id: 100
+        category: "Regression"
+        description: "Verify related endpoint still works"
+        auth: "admin"
+        method: "GET"
+        path: "/admin/related-endpoint"
+        expected:
+          status_code: 200
+
+# Optional: cleanup after all tests
+cleanup:
+  - description: "Revert test data"
+    method: "DELETE"
+    path: "/admin/some-endpoint/{{variable_name}}"
+    auth: "admin"

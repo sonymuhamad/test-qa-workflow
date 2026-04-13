@@ -1,0 +1,74 @@
+# test_cases/example-SD-0000.yaml
+# Example test case file for reference. Not executed in CI.
+
+ticket: "SD-0000"
+title: "GET /admin/insurance-providers"
+generated_at: "2026-04-13T10:00:00+07:00"
+generated_by: "claude"
+
+auth_profiles:
+  - name: admin
+    email_secret: "QA_ADMIN_EMAIL"
+    password_secret: "QA_ADMIN_PASSWORD"
+  - name: reader
+    email_secret: "QA_READER_EMAIL"
+    password_secret: "QA_READER_PASSWORD"
+
+test_cases:
+  - id: 1
+    category: "Happy Path"
+    description: "Get insurance providers with default pagination"
+    auth: admin
+    method: GET
+    path: "/admin/insurance-providers"
+    expected:
+      status_code: 200
+      body_contains:
+        meta:
+          http_code: 200
+
+  - id: 2
+    category: "Happy Path"
+    description: "Get insurance providers with limit parameter"
+    auth: admin
+    method: GET
+    path: "/admin/insurance-providers"
+    query_params:
+      limit: 5
+    expected:
+      status_code: 200
+
+  - id: 3
+    category: "Happy Path"
+    description: "Search insurance providers by keyword"
+    auth: admin
+    method: GET
+    path: "/admin/insurance-providers"
+    query_params:
+      keywords: "Provider"
+    expected:
+      status_code: 200
+
+  - id: 4
+    category: "Auth"
+    description: "No bearer token returns 401"
+    auth: none
+    method: GET
+    path: "/admin/insurance-providers"
+    expected:
+      status_code: 401
+      body_contains:
+        errors:
+          - message: "bearer token needed"
+
+  - id: 5
+    category: "Auth"
+    description: "Invalid bearer token returns 401"
+    auth: invalid
+    method: GET
+    path: "/admin/insurance-providers"
+    expected:
+      status_code: 401
+      body_contains:
+        errors:
+          - message: "bearer token invalid"
