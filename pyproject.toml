@@ -1,0 +1,9 @@
+[project]
+name = "satu-dental-qa"
+version = "0.1.0"
+description = "Automated QA system for Satu Dental CMS"
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
