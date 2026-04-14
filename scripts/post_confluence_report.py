@@ -1,25 +1,17 @@
-"""Post test results as a Confluence page under QA Reports.
+"""Post test report markdown to Confluence under QA Reports.
 
 Usage:
-    python scripts/post_confluence_report.py <TICKET> <results.json> --sprint SD-26-4-1
+    python scripts/post_confluence_report.py <TICKET> <report.md> --sprint SD-26-4-1
 
 Reads JIRA_EMAIL and JIRA_API_TOKEN from environment.
-Creates page under: Engineering > QA Reports > <sprint> > <ticket>
-
-Structure:
-  QA Reports (id: 632553480)
-    └── SD-26-4-1 (sprint page, created if not exists)
-          └── SD-3311 (test report page)
+Creates/updates page under: Engineering > QA Reports > <sprint> > <ticket>
 """
 
-import json
 import os
 import sys
 import requests
-from datetime import datetime
 
 CONFLUENCE_BASE = "https://techsatudental.atlassian.net/wiki"
-CLOUD_ID = "techsatudental.atlassian.net"
 SPACE_ID = "44793860"  # Engineering space
 QA_REPORTS_PAGE_ID = "632553480"
 
@@ -32,20 +24,32 @@ def get_auth():
     return (email, token)
 
 
-def find_child_page(auth, parent_id, title):
-    """Find a child page by title under a parent."""
+def list_children(auth, parent_id):
+    """List all child pages."""
     url = f"{CONFLUENCE_BASE}/api/v2/pages/{parent_id}/children"
-    params = {"limit": 100}
-    resp = requests.get(url, params=params, auth=auth)
+    resp = requests.get(url, params={"limit": 100}, auth=auth)
     resp.raise_for_status()
-    for page in resp.json().get("results", []):
-        if page["title"] == title:
-            return page["id"]
+    return resp.json().get("results", [])
+
+
+def find_child_by_title(auth, parent_id, title):
+    """Find a child page by exact title."""
+    for child in list_children(auth, parent_id):
+        if child["title"] == title:
+            return child["id"]
     return None
 
 
-def create_page(auth, parent_id, title, body_markdown):
-    """Create a Confluence page with markdown content."""
+def find_child_by_prefix(auth, parent_id, prefix):
+    """Find a child page whose title starts with prefix."""
+    for child in list_children(auth, parent_id):
+        if child["title"].startswith(prefix):
+            return child["id"], child["title"]
+    return None, None
+
+
+def create_page(auth, parent_id, title, body, content_format="wiki"):
+    """Create a Confluence page."""
     url = f"{CONFLUENCE_BASE}/api/v2/pages"
     payload = {
         "spaceId": SPACE_ID,
@@ -53,20 +57,18 @@ def create_page(auth, parent_id, title, body_markdown):
         "title": title,
         "status": "current",
         "body": {
-            "representation": "wiki",
-            "value": body_markdown,
+            "representation": content_format,
+            "value": body,
         },
     }
     resp = requests.post(url, json=payload, auth=auth,
                          headers={"Content-Type": "application/json"})
     resp.raise_for_status()
-    page = resp.json()
-    return page["id"]
+    return resp.json()["id"]
 
 
-def update_page(auth, page_id, title, body_markdown):
+def update_page(auth, page_id, title, body, content_format="wiki"):
     """Update an existing Confluence page."""
-    # Get current version
     url = f"{CONFLUENCE_BASE}/api/v2/pages/{page_id}"
     resp = requests.get(url, auth=auth)
     resp.raise_for_status()
@@ -79,8 +81,8 @@ def update_page(auth, page_id, title, body_markdown):
         "status": "current",
         "version": {"number": current_version + 1, "message": "Updated by QA Bot"},
         "body": {
-            "representation": "wiki",
-            "value": body_markdown,
+            "representation": content_format,
+            "value": body,
         },
     }
     resp = requests.put(url, json=payload, auth=auth,
@@ -89,139 +91,108 @@ def update_page(auth, page_id, title, body_markdown):
     return page_id
 
 
-def format_report_wiki(results: dict) -> str:
-    """Format test results as Confluence wiki markup."""
-    ticket = results["ticket"]
-    run_id = results["run_id"]
-    summary = results["summary"]
-    test_cases = results["test_cases"]
-    now = datetime.now().strftime("%Y-%m-%d %H:%M WIB")
+def markdown_to_confluence_wiki(md_content):
+    """Convert markdown to Confluence wiki markup.
 
-    lines = []
+    Handles the subset of markdown used in our test reports:
+    - # headings -> h1., h2., h3.
+    - | tables | -> || header || and | cell |
+    - `code` -> {{code}}
+    - **bold** -> *bold*
+    - ```code blocks``` -> {code}...{code}
+    - - list items -> * list items
+    """
+    lines = md_content.split("\n")
+    result = []
+    in_code_block = False
+    prev_was_table_header = False
 
-    # Header info panel
-    lines.append("{info:title=Test Run Info}")
-    lines.append(f"*Ticket:* {ticket}")
-    lines.append(f"*Run ID:* {{{{monospace:{run_id}}}}}")
-    lines.append(f"*Date:* {now}")
-    lines.append(f"*Environment:* Staging")
-    lines.append(f"*Tester:* Claude (automated)")
-    lines.append("{info}")
-    lines.append("")
-
-    # Summary panel
-    total = summary["total"]
-    passed = summary["passed"]
-    failed = summary["failed"]
-    skipped = summary.get("skipped", 0)
-
-    if failed == 0:
-        lines.append("{panel:bgColor=#dff0d8}")
-        lines.append(f"h3. (/) All {total} test cases PASSED")
-        lines.append("{panel}")
-    else:
-        lines.append("{panel:bgColor=#f2dede}")
-        lines.append(f"h3. (x) {failed} of {total} test cases FAILED")
-        lines.append("{panel}")
-
-    lines.append("")
-    lines.append("h2. Summary")
-    lines.append("")
-    lines.append("||Status||Count||")
-    lines.append(f"|(/)(green) PASS|{passed}|")
-    lines.append(f"|(x)(red) FAIL|{failed}|")
-    if skipped > 0:
-        lines.append(f"|(!) SKIP|{skipped}|")
-    lines.append(f"|*Total*|*{total}*|")
-    lines.append("")
-
-    # Group test cases by category
-    categories = {}
-    for tc in test_cases:
-        cat = tc.get("category", "Other")
-        if cat not in categories:
-            categories[cat] = []
-        categories[cat].append(tc)
-
-    # Results by category
-    for cat, cases in categories.items():
-        lines.append(f"h2. {cat}")
-        lines.append("")
-        lines.append("||#||Scenario||Expected||Actual||Status||")
-
-        for tc in cases:
-            tc_id = tc["id"]
-            desc = tc["description"]
-            resp = tc.get("response", {})
-            actual_code = resp.get("status_code", "")
-            status = tc["status"]
-            reason = tc.get("failure_reason", "")
-
-            # Status icon
-            if status == "PASS":
-                status_icon = "(/)"
-            elif status == "FAIL":
-                status_icon = "(x)"
+    for i, line in enumerate(lines):
+        # Code blocks
+        if line.strip().startswith("```"):
+            if in_code_block:
+                result.append("{code}")
+                in_code_block = False
             else:
-                status_icon = "(!)"
+                lang = line.strip().replace("```", "").strip()
+                if lang:
+                    result.append(f"{{code:language={lang}}}")
+                else:
+                    result.append("{code}")
+                in_code_block = True
+            continue
 
-            # Expected from description or failure reason
-            expected = ""
-            if reason:
-                # Extract expected from failure reason like "Expected status 400, got 200"
-                expected = reason
+        if in_code_block:
+            result.append(line)
+            continue
+
+        # Headings
+        if line.startswith("# "):
+            result.append(f"h1. {line[2:]}")
+            continue
+        if line.startswith("## "):
+            result.append(f"h2. {line[3:]}")
+            continue
+        if line.startswith("### "):
+            result.append(f"h3. {line[4:]}")
+            continue
+        if line.startswith("#### "):
+            result.append(f"h4. {line[5:]}")
+            continue
+
+        # Table separator rows (|---|---|) - skip
+        if line.strip().startswith("|") and set(line.replace("|", "").replace("-", "").replace(":", "").strip()) == set():
+            # Next: check if previous line was a header row
+            prev_was_table_header = True
+            continue
+
+        # Table rows
+        if line.strip().startswith("|") and line.strip().endswith("|"):
+            cells = [c.strip() for c in line.strip().split("|")[1:-1]]
+            if prev_was_table_header:
+                # The row BEFORE the separator was the header — already added, need to re-format it
+                # Pop the last added line and re-add as header
+                if result and result[-1].startswith("|"):
+                    header_line = result.pop()
+                    header_cells = [c.strip() for c in header_line.split("|")[1:-1]]
+                    result.append("||" + "||".join(header_cells) + "||")
+                prev_was_table_header = False
+                # Current line is first data row
+                result.append("|" + "|".join(cells) + "|")
             else:
-                expected = str(actual_code)
+                result.append("|" + "|".join(cells) + "|")
+            continue
 
-            lines.append(f"|{tc_id}|{desc}|{expected}|{actual_code}|{status_icon} {status}|")
+        prev_was_table_header = False
 
-        lines.append("")
+        # List items
+        if line.startswith("- "):
+            result.append(f"* {line[2:]}")
+            continue
+        if line.startswith("  - "):
+            result.append(f"** {line[4:]}")
+            continue
 
-    # Failed test details
-    failed_cases = [tc for tc in test_cases if tc["status"] == "FAIL"]
-    if failed_cases:
-        lines.append("h2. Failed Test Details")
-        lines.append("")
+        # Inline formatting
+        processed = line
+        # Bold: **text** -> *text*
+        import re
+        processed = re.sub(r'\*\*(.+?)\*\*', r'*\1*', processed)
+        # Inline code: `text` -> {{text}}
+        processed = re.sub(r'`(.+?)`', r'{{\1}}', processed)
 
-        for tc in failed_cases:
-            lines.append(f"h3. TC#{tc['id']} — {tc['description']}")
-            lines.append("")
+        result.append(processed)
 
-            req = tc.get("request", {})
-            resp = tc.get("response", {})
-
-            lines.append(f"*Request:* {{{{monospace:{req.get('method', '')} {req.get('url', '')}}}}}")
-
-            req_body = req.get("body")
-            if req_body:
-                lines.append("{code:json}")
-                lines.append(json.dumps(req_body, indent=2))
-                lines.append("{code}")
-
-            lines.append(f"*Response:* Status {resp.get('status_code', '')}")
-            resp_body = resp.get("body")
-            if resp_body:
-                resp_str = json.dumps(resp_body, indent=2)
-                if len(resp_str) > 2000:
-                    resp_str = resp_str[:2000] + "\n... (truncated)"
-                lines.append("{code:json}")
-                lines.append(resp_str)
-                lines.append("{code}")
-
-            if tc.get("failure_reason"):
-                lines.append(f"*Reason:* {tc['failure_reason']}")
-            lines.append("")
-
-    return "\n".join(lines)
+    return "\n".join(result)
 
 
 def main():
     if len(sys.argv) < 3:
-        print("Usage: python scripts/post_confluence_report.py <TICKET> <results.json> --sprint SD-26-4-1")
+        print("Usage: python scripts/post_confluence_report.py <TICKET> <report.md> --sprint SD-26-4-1")
         sys.exit(1)
 
     ticket = sys.argv[1]
-    results_path = sys.argv[2]
+    report_path = sys.argv[2]
     sprint = "SD-26-4-1"  # default
     if "--sprint" in sys.argv:
         idx = sys.argv.index("--sprint")
@@ -233,11 +204,14 @@ def main():
         print("[confluence] JIRA_EMAIL or JIRA_API_TOKEN not set — skipping")
         sys.exit(0)
 
-    with open(results_path) as f:
-        results = json.load(f)
+    with open(report_path) as f:
+        md_content = f.read()
+
+    # Convert markdown to Confluence wiki markup
+    wiki_content = markdown_to_confluence_wiki(md_content)
 
     # 1. Find or create sprint page under QA Reports
-    sprint_page_id = find_child_page(auth, QA_REPORTS_PAGE_ID, sprint)
+    sprint_page_id = find_child_by_title(auth, QA_REPORTS_PAGE_ID, sprint)
     if not sprint_page_id:
         print(f"[confluence] Creating sprint page '{sprint}'...")
         sprint_page_id = create_page(auth, QA_REPORTS_PAGE_ID, sprint,
@@ -246,41 +220,23 @@ def main():
     else:
         print(f"[confluence] Found sprint page '{sprint}': {sprint_page_id}")
 
-    # 2. Format report
-    wiki_body = format_report_wiki(results)
+    # 2. Find existing page for this ticket or create new
+    # Extract title from first line of markdown
+    first_line = md_content.split("\n")[0].lstrip("# ").strip()
+    title = first_line if first_line else f"{ticket} — Test Cases"
 
-    # 3. Find or create/update ticket report page
-    summary = results["summary"]
-    title = f"{ticket} — {summary['passed']}/{summary['total']} PASSED"
+    existing_id, existing_title = find_child_by_prefix(auth, sprint_page_id, ticket)
 
-    existing_page_id = find_child_page(auth, sprint_page_id, None)
-    # Search for any page starting with ticket name
-    for child in _list_children(auth, sprint_page_id):
-        if child["title"].startswith(ticket):
-            existing_page_id = child["id"]
-            break
+    if existing_id:
+        print(f"[confluence] Updating existing page '{existing_title}'...")
+        update_page(auth, existing_id, title, wiki_content)
+        page_id = existing_id
     else:
-        existing_page_id = None
-
-    if existing_page_id:
-        print(f"[confluence] Updating existing page for {ticket}...")
-        update_page(auth, existing_page_id, title, wiki_body)
-        page_id = existing_page_id
-    else:
-        print(f"[confluence] Creating report page for {ticket}...")
-        page_id = create_page(auth, sprint_page_id, title, wiki_body)
+        print(f"[confluence] Creating report page '{title}'...")
+        page_id = create_page(auth, sprint_page_id, title, wiki_content)
 
     page_url = f"{CONFLUENCE_BASE}/spaces/TD/pages/{page_id}"
     print(f"[confluence] Report posted: {page_url}")
-    print(f"[confluence] Done")
-
-
-def _list_children(auth, parent_id):
-    """List all child pages."""
-    url = f"{CONFLUENCE_BASE}/api/v2/pages/{parent_id}/children"
-    resp = requests.get(url, params={"limit": 100}, auth=auth)
-    resp.raise_for_status()
-    return resp.json().get("results", [])
 
 
 if __name__ == "__main__":

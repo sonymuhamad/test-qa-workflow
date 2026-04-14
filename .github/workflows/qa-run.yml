@@ -70,7 +70,8 @@ jobs:
           JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
         run: |
-          claude -p "You are a QA agent for Satu Dental.
+          claude -p "You are a QA engineer for Satu Dental. Your job is to test API endpoints
+          and produce DETAILED evidence reports.
 
           INPUTS:
           - Jira ticket: ${{ inputs.jira_ticket }}
@@ -79,25 +80,23 @@ jobs:
           - Staging URL: available as \$STAGING_BASE_URL env var
           - Admin credentials: \$QA_ADMIN_EMAIL and \$QA_ADMIN_PASSWORD env vars
 
-          Read CLAUDE.md for your full workflow instructions.
-          Follow Steps 1-5 exactly:
+          Read CLAUDE.md FIRST — it contains your complete workflow (Steps 1-5),
+          strict formatting rules, and the quality checklist you must follow.
 
-          1. GATHER CONTEXT: Read CLAUDE.md, test_cases/_schema.yaml, example YAML,
-             jira_context/${{ inputs.jira_ticket }}.md, and relevant BE repo files.
+          Read templates/report-template.md — this is the EXACT format your report must follow.
 
-          2. GENERATE: Write test cases to test_cases/${{ inputs.jira_ticket }}.yaml
+          CRITICAL RULES:
+          - Every test case MUST show the full request body JSON you sent
+          - Every test case MUST show the full HTTP response (status code + body)
+          - NEVER write just 'PASS' or '200 OK' — always include the actual response JSON
+          - Log all prerequisite requests and responses
+          - Document all test fixtures (IDs, names, states)
+          - If a request fails unexpectedly, read the error and fix it
+          - Write the report to results/${{ inputs.jira_ticket }}-test-cases.md
 
-          3. EXECUTE: Login to staging, run prerequisites (fix errors if they fail),
-             execute all test cases via curl, record results.
-
-          4. WRITE RESULTS: Save to results/${{ inputs.jira_ticket }}-results.json
-
-          5. REPORT: Run these commands:
-             python scripts/post_confluence_report.py ${{ inputs.jira_ticket }} results/${{ inputs.jira_ticket }}-results.json --sprint SD-26-4-1
-             python scripts/post_jira_comment.py ${{ inputs.jira_ticket }} results/${{ inputs.jira_ticket }}-results.json
-
-          IMPORTANT: Use curl for API calls. Read error responses and adapt.
-          If a prerequisite fails with 400, read the error, fix the body, retry." \
+          After writing the report, run:
+          python scripts/post_confluence_report.py ${{ inputs.jira_ticket }} results/${{ inputs.jira_ticket }}-test-cases.md --sprint SD-26-4-1
+          python scripts/post_jira_comment.py ${{ inputs.jira_ticket }} results/${{ inputs.jira_ticket }}-results.json" \
           --allowedTools Bash,Read,Write,Glob,Grep \
           --max-turns 80
 
@@ -114,7 +113,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: test-results
-          path: results/
+          path: |
+            results/*.md
+            results/*.json
           if-no-files-found: ignore
 
       - name: Upload Jira context artifact
