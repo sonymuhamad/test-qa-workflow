@@ -38,9 +38,13 @@ def prerequisite_vars(staging_url, auth_manager, test_data):
     variables = {}
     for prereq in test_data.get("prerequisites", []):
         headers = auth_manager.get_headers(prereq.get("auth", "admin"))
+        # Resolve {{var}} references in prerequisite paths
+        path = prereq["path"]
+        for var_name, var_value in variables.items():
+            path = path.replace(f"{{{{{var_name}}}}}", str(var_value))
         response = httpx.request(
             method=prereq["method"],
-            url=f"{staging_url}{prereq['path']}",
+            url=f"{staging_url}{path}",
             headers=headers,
             json=prereq.get("body"),
         )
