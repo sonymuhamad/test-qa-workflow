@@ -67,9 +67,6 @@ jobs:
           QA_READER_PASSWORD: ${{ secrets.QA_READER_PASSWORD }}
           QA_NOPERM_EMAIL: ${{ secrets.QA_NOPERM_EMAIL }}
           QA_NOPERM_PASSWORD: ${{ secrets.QA_NOPERM_PASSWORD }}
-          SHEETS_WEBAPP_URL: ${{ secrets.SHEETS_WEBAPP_URL }}
-          SHEETS_WEBAPP_TOKEN: ${{ secrets.SHEETS_WEBAPP_TOKEN }}
-          QA_SPREADSHEET_ID: ${{ secrets.QA_SPREADSHEET_ID }}
           JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
         run: |
@@ -96,7 +93,7 @@ jobs:
           4. WRITE RESULTS: Save to results/${{ inputs.jira_ticket }}-results.json
 
           5. REPORT: Run these commands:
-             python scripts/upload_sheets.py results/${{ inputs.jira_ticket }}-results.json
+             python scripts/post_confluence_report.py ${{ inputs.jira_ticket }} results/${{ inputs.jira_ticket }}-results.json --sprint SD-26-4-1
              python scripts/post_jira_comment.py ${{ inputs.jira_ticket }} results/${{ inputs.jira_ticket }}-results.json
 
           IMPORTANT: Use curl for API calls. Read error responses and adapt.

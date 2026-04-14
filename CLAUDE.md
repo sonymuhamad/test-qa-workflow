@@ -132,15 +132,17 @@ Write results to `results/<ticket>-results.json`:
 
 ### Step 5: Report Results
 
-Run these scripts to upload results:
+Run these scripts to post results:
 
 ```bash
-# Upload to Google Sheets
-python scripts/upload_sheets.py results/<ticket>-results.json
+# Post report to Confluence (Engineering > QA Reports > Sprint > Ticket)
+python scripts/post_confluence_report.py <ticket> results/<ticket>-results.json --sprint SD-26-4-1
 
 # Post rich comment on Jira ticket
 python scripts/post_jira_comment.py <ticket> results/<ticket>-results.json
 ```
+
+**IMPORTANT:** The `--sprint` flag should match the current active sprint (e.g., SD-26-4-1 = Sprint 1, April 2026).
 
 ## YAML Test Case Format
 
