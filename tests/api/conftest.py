@@ -4,6 +4,7 @@ from jsonpath_ng import parse
 from lib.yaml_loader import load_test_cases, collect_all_test_cases
 from lib.auth import AuthManager
 from lib.evidence import EvidenceCapture
+from lib.results_writer import write_results_json, write_summary_markdown
 
 
 @pytest.fixture(scope="session")
@@ -23,6 +24,12 @@ def evidence(test_data, run_id, request):
     ev = EvidenceCapture(ticket=test_data["ticket"], run_id=run_id)
     request.config._evidence = ev
     yield ev
+
+    # Write results to files after all tests complete
+    import json
+    results = json.loads(ev.to_json())
+    write_results_json(results, output_dir="results")
+    write_summary_markdown(results, output_dir="results")
 
 
 @pytest.fixture(scope="session")
