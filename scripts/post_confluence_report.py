@@ -5,14 +5,18 @@ Usage:
 
 Reads JIRA_EMAIL and JIRA_API_TOKEN from environment.
 Creates/updates page under: Engineering > QA Reports > <sprint> > <ticket>
+
+Uses Confluence v1 REST API with storage (XHTML) format for reliability.
 """
 
 import os
+import re
 import sys
+import html
 import requests
 
 CONFLUENCE_BASE = "https://techsatudental.atlassian.net/wiki"
-SPACE_ID = "44793860"  # Engineering space
+SPACE_KEY = "TD"
 QA_REPORTS_PAGE_ID = "632553480"
 
 
@@ -24,65 +28,57 @@ def get_auth():
     return (email, token)
 
 
-def list_children(auth, parent_id):
-    """List all child pages."""
-    url = f"{CONFLUENCE_BASE}/api/v2/pages/{parent_id}/children"
-    resp = requests.get(url, params={"limit": 100}, auth=auth)
+def find_child_page_v1(auth, parent_id, title):
+    """Find a child page by title using v1 API."""
+    url = f"{CONFLUENCE_BASE}/rest/api/content"
+    params = {
+        "spaceKey": SPACE_KEY,
+        "title": title,
+        "expand": "version",
+    }
+    resp = requests.get(url, params=params, auth=auth)
     resp.raise_for_status()
-    return resp.json().get("results", [])
-
-
-def find_child_by_title(auth, parent_id, title):
-    """Find a child page by exact title."""
-    for child in list_children(auth, parent_id):
-        if child["title"] == title:
-            return child["id"]
-    return None
-
-
-def find_child_by_prefix(auth, parent_id, prefix):
-    """Find a child page whose title starts with prefix."""
-    for child in list_children(auth, parent_id):
-        if child["title"].startswith(prefix):
-            return child["id"], child["title"]
+    results = resp.json().get("results", [])
+    for page in results:
+        if page["title"] == title:
+            return page["id"], page["version"]["number"]
     return None, None
 
 
-def create_page(auth, parent_id, title, body, content_format="wiki"):
-    """Create a Confluence page."""
-    url = f"{CONFLUENCE_BASE}/api/v2/pages"
+def create_page_v1(auth, parent_id, title, html_body):
+    """Create a page using v1 API with storage format."""
+    url = f"{CONFLUENCE_BASE}/rest/api/content"
     payload = {
-        "spaceId": SPACE_ID,
-        "parentId": parent_id,
+        "type": "page",
         "title": title,
-        "status": "current",
+        "space": {"key": SPACE_KEY},
+        "ancestors": [{"id": str(parent_id)}],
         "body": {
-            "representation": content_format,
-            "value": body,
+            "storage": {
+                "value": html_body,
+                "representation": "storage",
+            }
         },
     }
     resp = requests.post(url, json=payload, auth=auth,
                          headers={"Content-Type": "application/json"})
     resp.raise_for_status()
-    return resp.json()["id"]
+    data = resp.json()
+    return data["id"]
 
 
-def update_page(auth, page_id, title, body, content_format="wiki"):
-    """Update an existing Confluence page."""
-    url = f"{CONFLUENCE_BASE}/api/v2/pages/{page_id}"
-    resp = requests.get(url, auth=auth)
-    resp.raise_for_status()
-    current_version = resp.json()["version"]["number"]
-
+def update_page_v1(auth, page_id, title, html_body, version_number):
+    """Update a page using v1 API."""
+    url = f"{CONFLUENCE_BASE}/rest/api/content/{page_id}"
     payload = {
-        "id": page_id,
+        "type": "page",
         "title": title,
-        "spaceId": SPACE_ID,
-        "status": "current",
-        "version": {"number": current_version + 1, "message": "Updated by QA Bot"},
+        "version": {"number": version_number + 1},
         "body": {
-            "representation": content_format,
-            "value": body,
+            "storage": {
+                "value": html_body,
+                "representation": "storage",
+            }
         },
     }
     resp = requests.put(url, json=payload, auth=auth,
@@ -91,99 +87,124 @@ def update_page(auth, page_id, title, body, content_format="wiki"):
     return page_id
 
 
-def markdown_to_confluence_wiki(md_content):
-    """Convert markdown to Confluence wiki markup.
+def markdown_to_html(md_content):
+    """Convert markdown to Confluence storage format (XHTML).
 
-    Handles the subset of markdown used in our test reports:
-    - # headings -> h1., h2., h3.
-    - | tables | -> || header || and | cell |
-    - `code` -> {{code}}
-    - **bold** -> *bold*
-    - ```code blocks``` -> {code}...{code}
-    - - list items -> * list items
+    Handles: headings, tables, bold, inline code, code blocks, lists.
     """
     lines = md_content.split("\n")
     result = []
     in_code_block = False
-    prev_was_table_header = False
+    in_table = False
+    table_header_done = False
+    i = 0
 
-    for i, line in enumerate(lines):
+    while i < len(lines):
+        line = lines[i]
+
         # Code blocks
         if line.strip().startswith("```"):
             if in_code_block:
-                result.append("{code}")
+                result.append("]]></ac:plain-text-body></ac:structured-macro>")
                 in_code_block = False
             else:
-                lang = line.strip().replace("```", "").strip()
-                if lang:
-                    result.append(f"{{code:language={lang}}}")
-                else:
-                    result.append("{code}")
+                lang = line.strip().replace("```", "").strip() or "json"
+                result.append(f'<ac:structured-macro ac:name="code"><ac:parameter ac:name="language">{lang}</ac:parameter><ac:plain-text-body><![CDATA[')
                 in_code_block = True
+            i += 1
             continue
 
         if in_code_block:
             result.append(line)
+            i += 1
             continue
 
-        # Headings
-        if line.startswith("# "):
-            result.append(f"h1. {line[2:]}")
-            continue
-        if line.startswith("## "):
-            result.append(f"h2. {line[3:]}")
-            continue
-        if line.startswith("### "):
-            result.append(f"h3. {line[4:]}")
-            continue
-        if line.startswith("#### "):
-            result.append(f"h4. {line[5:]}")
-            continue
+        # Close table if needed
+        if in_table and not line.strip().startswith("|"):
+            result.append("</tbody></table>")
+            in_table = False
+            table_header_done = False
 
         # Table separator rows (|---|---|) - skip
-        if line.strip().startswith("|") and set(line.replace("|", "").replace("-", "").replace(":", "").strip()) == set():
-            # Next: check if previous line was a header row
-            prev_was_table_header = True
+        if line.strip().startswith("|") and re.match(r'^\|[\s\-:|]+\|$', line.strip()):
+            table_header_done = True
+            i += 1
             continue
 
         # Table rows
         if line.strip().startswith("|") and line.strip().endswith("|"):
             cells = [c.strip() for c in line.strip().split("|")[1:-1]]
-            if prev_was_table_header:
-                # The row BEFORE the separator was the header — already added, need to re-format it
-                # Pop the last added line and re-add as header
-                if result and result[-1].startswith("|"):
-                    header_line = result.pop()
-                    header_cells = [c.strip() for c in header_line.split("|")[1:-1]]
-                    result.append("||" + "||".join(header_cells) + "||")
-                prev_was_table_header = False
-                # Current line is first data row
-                result.append("|" + "|".join(cells) + "|")
+
+            if not in_table:
+                result.append('<table><tbody>')
+                in_table = True
+
+            if not table_header_done:
+                # This is the header row
+                row = "<tr>" + "".join(f"<th><p>{_inline(html.escape(c))}</p></th>" for c in cells) + "</tr>"
             else:
-                result.append("|" + "|".join(cells) + "|")
+                row = "<tr>" + "".join(f"<td><p>{_inline(html.escape(c))}</p></td>" for c in cells) + "</tr>"
+            result.append(row)
+            i += 1
             continue
 
-        prev_was_table_header = False
+        # Headings
+        if line.startswith("#### "):
+            result.append(f"<h4>{_inline(html.escape(line[5:]))}</h4>")
+            i += 1
+            continue
+        if line.startswith("### "):
+            result.append(f"<h3>{_inline(html.escape(line[4:]))}</h3>")
+            i += 1
+            continue
+        if line.startswith("## "):
+            result.append(f"<h2>{_inline(html.escape(line[3:]))}</h2>")
+            i += 1
+            continue
+        if line.startswith("# "):
+            result.append(f"<h1>{_inline(html.escape(line[2:]))}</h1>")
+            i += 1
+            continue
 
         # List items
         if line.startswith("- "):
-            result.append(f"* {line[2:]}")
-            continue
-        if line.startswith("  - "):
-            result.append(f"** {line[4:]}")
+            # Collect all list items
+            items = []
+            while i < len(lines) and lines[i].startswith("- "):
+                items.append(lines[i][2:])
+                i += 1
+            result.append("<ul>" + "".join(f"<li><p>{_inline(html.escape(item))}</p></li>" for item in items) + "</ul>")
             continue
 
-        # Inline formatting
-        processed = line
-        # Bold: **text** -> *text*
-        import re
-        processed = re.sub(r'\*\*(.+?)\*\*', r'*\1*', processed)
-        # Inline code: `text` -> {{text}}
-        processed = re.sub(r'`(.+?)`', r'{{\1}}', processed)
+        # Empty line
+        if line.strip() == "":
+            i += 1
+            continue
 
-        result.append(processed)
+        # Horizontal rule
+        if line.strip() == "---":
+            result.append("<hr/>")
+            i += 1
+            continue
+
+        # Regular paragraph
+        result.append(f"<p>{_inline(html.escape(line))}</p>")
+        i += 1
+
+    # Close any open table
+    if in_table:
+        result.append("</tbody></table>")
 
     return "\n".join(result)
+
+
+def _inline(text):
+    """Process inline markdown: **bold**, `code`."""
+    # Bold
+    text = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', text)
+    # Inline code
+    text = re.sub(r'`(.+?)`', r'<code>\1</code>', text)
+    return text
 
 
 def main():
@@ -193,7 +214,7 @@ def main():
 
     ticket = sys.argv[1]
     report_path = sys.argv[2]
-    sprint = "SD-26-4-1"  # default
+    sprint = "SD-26-4-1"
     if "--sprint" in sys.argv:
         idx = sys.argv.index("--sprint")
         if idx + 1 < len(sys.argv):
@@ -207,36 +228,48 @@ def main():
     with open(report_path) as f:
         md_content = f.read()
 
-    # Convert markdown to Confluence wiki markup
-    wiki_content = markdown_to_confluence_wiki(md_content)
+    # Convert to HTML storage format
+    html_body = markdown_to_html(md_content)
 
-    # 1. Find or create sprint page under QA Reports
-    sprint_page_id = find_child_by_title(auth, QA_REPORTS_PAGE_ID, sprint)
-    if not sprint_page_id:
+    # 1. Find or create sprint page
+    sprint_id, sprint_ver = find_child_page_v1(auth, QA_REPORTS_PAGE_ID, sprint)
+    if not sprint_id:
         print(f"[confluence] Creating sprint page '{sprint}'...")
-        sprint_page_id = create_page(auth, QA_REPORTS_PAGE_ID, sprint,
-                                     f"Sprint {sprint} — Automated QA test reports.")
-        print(f"[confluence] Created sprint page: {sprint_page_id}")
+        sprint_id = create_page_v1(auth, QA_REPORTS_PAGE_ID, sprint,
+                                   f"<p>Sprint {html.escape(sprint)} — Automated QA test reports.</p>")
+        print(f"[confluence] Created: {sprint_id}")
     else:
-        print(f"[confluence] Found sprint page '{sprint}': {sprint_page_id}")
+        print(f"[confluence] Found sprint page: {sprint_id}")
 
-    # 2. Find existing page for this ticket or create new
-    # Extract title from first line of markdown
+    # 2. Extract title from first line
     first_line = md_content.split("\n")[0].lstrip("# ").strip()
     title = first_line if first_line else f"{ticket} — Test Cases"
 
-    existing_id, existing_title = find_child_by_prefix(auth, sprint_page_id, ticket)
+    # 3. Find existing page for this ticket
+    existing_id, existing_ver = find_child_page_v1(auth, sprint_id, title)
+
+    # Also search by ticket prefix in case title changed
+    if not existing_id:
+        url = f"{CONFLUENCE_BASE}/rest/api/content"
+        params = {"spaceKey": SPACE_KEY, "title": ticket, "expand": "version"}
+        resp = requests.get(url, params=params, auth=auth)
+        if resp.ok:
+            for page in resp.json().get("results", []):
+                if page["title"].startswith(ticket):
+                    existing_id = page["id"]
+                    existing_ver = page["version"]["number"]
+                    break
 
     if existing_id:
-        print(f"[confluence] Updating existing page '{existing_title}'...")
-        update_page(auth, existing_id, title, wiki_content)
+        print(f"[confluence] Updating existing page {existing_id}...")
+        update_page_v1(auth, existing_id, title, html_body, existing_ver)
         page_id = existing_id
     else:
-        print(f"[confluence] Creating report page '{title}'...")
-        page_id = create_page(auth, sprint_page_id, title, wiki_content)
+        print(f"[confluence] Creating page '{title}'...")
+        page_id = create_page_v1(auth, sprint_id, title, html_body)
 
     page_url = f"{CONFLUENCE_BASE}/spaces/TD/pages/{page_id}"
-    print(f"[confluence] Report posted: {page_url}")
+    print(f"[confluence] Done: {page_url}")
 
 
 if __name__ == "__main__":
