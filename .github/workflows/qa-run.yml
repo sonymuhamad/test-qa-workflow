@@ -61,28 +61,34 @@ jobs:
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         run: |
-          claude -p "You are QA for Satu Dental.
-          Jira ticket: ${{ inputs.jira_ticket }}
-          PR: ${{ inputs.pr_number }}
-          Scope: ${{ inputs.scope }}
+          claude -p "You are QA for Satu Dental. Generate YAML test cases efficiently.
 
-          Read CLAUDE.md for full context about the application, staging environment,
-          auth flow, YAML schema, and test case generation guidelines.
+          INPUTS:
+          - Jira ticket: ${{ inputs.jira_ticket }}
+          - PR: ${{ inputs.pr_number }}
+          - Scope: ${{ inputs.scope }}
 
-          Read the Jira ticket context at ./jira_context/${{ inputs.jira_ticket }}.md
-          for the ticket description, acceptance criteria, implementation details,
-          and any existing QA spreadsheet links from comments.
+          STEPS (do these in order, do NOT explore beyond what is listed):
+          1. Read ./CLAUDE.md (QA context, auth flow, YAML schema rules)
+          2. Read ./test_cases/_schema.yaml (YAML format reference)
+          3. Read ./test_cases/example-SD-0000.yaml (example to follow)
+          4. Read ./jira_context/${{ inputs.jira_ticket }}.md (ticket details from Jira)
+          5. In be-repo/, find the handler for the endpoint in the ticket:
+             - Read be-repo/httpserver/routing.go to find the route
+             - Read the handler file for request/response structs
+             - Read the usecase file for business logic and validations
+          6. If PR number is provided, run: cd be-repo && git diff main...HEAD -- '*.go' to see changes
+          7. Write the YAML test file to test_cases/${{ inputs.jira_ticket }}.yaml
 
-          Read the BE repo at ./be-repo/ for Swagger docs, codebase, and PR diff.
-
-          Generate test cases and write them to test_cases/${{ inputs.jira_ticket }}.yaml
-          following the schema in test_cases/_schema.yaml.
-
-          Include: happy path, auth tests, validation, edge cases.
-          For changed_and_related scope: also test related endpoints.
-          Include prerequisites for test data setup and cleanup." \
+          IMPORTANT:
+          - Do NOT read Swagger JSON files (too large, wastes turns)
+          - Do NOT explore the entire codebase — only read files relevant to the endpoint
+          - Follow the YAML schema exactly as shown in _schema.yaml
+          - Include: auth tests (none/invalid/no_permission), validation, happy path, edge cases
+          - Include prerequisites for test data setup and cleanup
+          - Write the file as your FINAL action" \
           --allowedTools Bash,Read,Write,Glob,Grep \
-          --max-turns 30
+          --max-turns 50
 
       - name: Upload test cases artifact
         uses: actions/upload-artifact@v4
