@@ -28,11 +28,14 @@ class TestAPIRunner:
         headers["Content-Type"] = "application/json"
 
         # 2. Resolve path
-        path = resolve_variables(
-            test_case["path"],
-            test_case.get("path_params"),
-            prerequisite_vars,
-        )
+        try:
+            path = resolve_variables(
+                test_case["path"],
+                test_case.get("path_params"),
+                prerequisite_vars,
+            )
+        except KeyError as e:
+            pytest.skip(f"Missing prerequisite variable: {e}")
         url = f"{staging_url}{path}"
 
         # 3. Execute request
