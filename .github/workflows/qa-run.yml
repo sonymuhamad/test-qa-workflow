@@ -21,8 +21,8 @@ on:
           - full_regression
 
 jobs:
-  phase1-generate:
-    name: "Phase 1: Generate Test Cases (Claude)"
+  qa-agent:
+    name: "QA Agent (Generate + Execute + Report)"
     runs-on: ubuntu-latest
     steps:
       - name: Checkout QA repo
@@ -41,7 +41,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install Python dependencies
-        run: pip install requests
+        run: pip install requests pyyaml
 
       - name: Fetch Jira ticket context
         env:
@@ -57,76 +57,9 @@ jobs:
       - name: Install Claude Code
         run: npm install -g @anthropic-ai/claude-code
 
-      - name: Generate test cases
+      - name: Run QA Agent
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-        run: |
-          claude -p "You are QA for Satu Dental. Generate YAML test cases efficiently.
-
-          INPUTS:
-          - Jira ticket: ${{ inputs.jira_ticket }}
-          - PR: ${{ inputs.pr_number }}
-          - Scope: ${{ inputs.scope }}
-
-          STEPS (do these in order, do NOT explore beyond what is listed):
-          1. Read ./CLAUDE.md (QA context, auth flow, YAML schema rules)
-          2. Read ./test_cases/_schema.yaml (YAML format reference)
-          3. Read ./test_cases/example-SD-0000.yaml (example to follow)
-          4. Read ./jira_context/${{ inputs.jira_ticket }}.md (ticket details from Jira)
-          5. In be-repo/, find the handler for the endpoint in the ticket:
-             - Read be-repo/httpserver/routing.go to find the route
-             - Read the handler file for request/response structs
-             - Read the usecase file for business logic and validations
-          6. If PR number is provided, run: cd be-repo && git diff main...HEAD -- '*.go' to see changes
-          7. Write the YAML test file to test_cases/${{ inputs.jira_ticket }}.yaml
-
-          IMPORTANT:
-          - Do NOT read Swagger JSON files (too large, wastes turns)
-          - Do NOT explore the entire codebase — only read files relevant to the endpoint
-          - Follow the YAML schema exactly as shown in _schema.yaml
-          - Include: auth tests (none/invalid/no_permission), validation, happy path, edge cases
-          - Include prerequisites for test data setup and cleanup
-          - Write the file as your FINAL action" \
-          --allowedTools Bash,Read,Write,Glob,Grep \
-          --max-turns 50
-
-      - name: Upload test cases artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-cases
-          path: test_cases/${{ inputs.jira_ticket }}.yaml
-
-      - name: Upload Jira context artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: jira-context
-          path: jira_context/
-
-  phase2-execute:
-    name: "Phase 2: Execute Tests (pytest)"
-    needs: phase1-generate
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout QA repo
-        uses: actions/checkout@v4
-
-      - name: Download test cases
-        uses: actions/download-artifact@v4
-        with:
-          name: test-cases
-          path: test_cases/
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Run tests
-        id: run-tests
-        env:
           STAGING_BASE_URL: ${{ secrets.STAGING_BASE_URL }}
           QA_ADMIN_EMAIL: ${{ secrets.QA_ADMIN_EMAIL }}
           QA_ADMIN_PASSWORD: ${{ secrets.QA_ADMIN_PASSWORD }}
@@ -134,127 +67,73 @@ jobs:
           QA_READER_PASSWORD: ${{ secrets.QA_READER_PASSWORD }}
           QA_NOPERM_EMAIL: ${{ secrets.QA_NOPERM_EMAIL }}
           QA_NOPERM_PASSWORD: ${{ secrets.QA_NOPERM_PASSWORD }}
+          SHEETS_WEBAPP_URL: ${{ secrets.SHEETS_WEBAPP_URL }}
+          SHEETS_WEBAPP_TOKEN: ${{ secrets.SHEETS_WEBAPP_TOKEN }}
+          QA_SPREADSHEET_ID: ${{ secrets.QA_SPREADSHEET_ID }}
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
         run: |
-          RUN_ID="run-$(date +%Y%m%d-%H%M%S)"
-          echo "run_id=$RUN_ID" >> $GITHUB_OUTPUT
-          mkdir -p results
-          pytest tests/api/test_runner.py \
-            --yaml-file=test_cases/${{ inputs.jira_ticket }}.yaml \
-            --run-id=$RUN_ID \
-            -v --tb=short || true
+          claude -p "You are a QA agent for Satu Dental.
 
-      - name: Upload test results
+          INPUTS:
+          - Jira ticket: ${{ inputs.jira_ticket }}
+          - PR: ${{ inputs.pr_number }}
+          - Scope: ${{ inputs.scope }}
+          - Staging URL: available as \$STAGING_BASE_URL env var
+          - Admin credentials: \$QA_ADMIN_EMAIL and \$QA_ADMIN_PASSWORD env vars
+
+          Read CLAUDE.md for your full workflow instructions.
+          Follow Steps 1-5 exactly:
+
+          1. GATHER CONTEXT: Read CLAUDE.md, test_cases/_schema.yaml, example YAML,
+             jira_context/${{ inputs.jira_ticket }}.md, and relevant BE repo files.
+
+          2. GENERATE: Write test cases to test_cases/${{ inputs.jira_ticket }}.yaml
+
+          3. EXECUTE: Login to staging, run prerequisites (fix errors if they fail),
+             execute all test cases via curl, record results.
+
+          4. WRITE RESULTS: Save to results/${{ inputs.jira_ticket }}-results.json
+
+          5. REPORT: Run these commands:
+             python scripts/upload_sheets.py results/${{ inputs.jira_ticket }}-results.json
+             python scripts/post_jira_comment.py ${{ inputs.jira_ticket }} results/${{ inputs.jira_ticket }}-results.json
+
+          IMPORTANT: Use curl for API calls. Read error responses and adapt.
+          If a prerequisite fails with 400, read the error, fix the body, retry." \
+          --allowedTools Bash,Read,Write,Glob,Grep \
+          --max-turns 80
+
+      - name: Upload test cases artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-cases
+          path: test_cases/${{ inputs.jira_ticket }}.yaml
+          if-no-files-found: ignore
+
+      - name: Upload results artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: test-results
           path: results/
+          if-no-files-found: ignore
 
-    outputs:
-      run_id: ${{ steps.run-tests.outputs.run_id }}
-
-  phase3-report:
-    name: "Phase 3: Report Results"
-    needs: phase2-execute
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout QA repo
-        uses: actions/checkout@v4
-
-      - name: Download test cases
-        uses: actions/download-artifact@v4
-        with:
-          name: test-cases
-          path: test_cases/
-
-      - name: Download results
-        uses: actions/download-artifact@v4
-        with:
-          name: test-results
-          path: results/
-
-      - name: Download Jira context
-        uses: actions/download-artifact@v4
+      - name: Upload Jira context artifact
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
           name: jira-context
           path: jira_context/
-        continue-on-error: true
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Upload to Google Sheets
-        if: env.SHEETS_WEBAPP_URL != ''
-        env:
-          SHEETS_WEBAPP_URL: ${{ secrets.SHEETS_WEBAPP_URL }}
-          SHEETS_WEBAPP_TOKEN: ${{ secrets.SHEETS_WEBAPP_TOKEN }}
-        run: |
-          python -c "
-          import json, os, sys
-          sys.path.insert(0, '.')
-          from lib.sheets_reporter import SheetsReporter
-          results = json.load(open('results/${{ inputs.jira_ticket }}-results.json'))
-          reporter = SheetsReporter(
-              webapp_url=os.environ['SHEETS_WEBAPP_URL'],
-              secret_token=os.environ['SHEETS_WEBAPP_TOKEN'],
-          )
-          result = reporter.upload(results, dev_pic='')
-          print(f'Uploaded to Google Sheets: {result}')
-          "
-
-      - name: Comment on Jira
-        if: env.JIRA_API_TOKEN != ''
-        env:
-          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
-          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
-          QA_SPREADSHEET_ID: ${{ secrets.QA_SPREADSHEET_ID }}
-          SHEETS_WEBAPP_URL: ${{ secrets.SHEETS_WEBAPP_URL }}
-        run: |
-          python -c "
-          import json, os, sys, glob
-          sys.path.insert(0, '.')
-          from lib.jira_reporter import JiraReporter
-
-          results = json.load(open('results/${{ inputs.jira_ticket }}-results.json'))
-
-          # Try to find spreadsheet URL from Jira comments first
-          sheets_url = ''
-          urls_file = 'jira_context/${{ inputs.jira_ticket }}-spreadsheet-urls.json'
-          if os.path.exists(urls_file):
-              urls = json.load(open(urls_file))
-              if urls:
-                  sheets_url = urls[0]
-
-          # Fallback to default spreadsheet
-          if not sheets_url:
-              spreadsheet_id = os.environ.get('QA_SPREADSHEET_ID', '')
-              if spreadsheet_id:
-                  sheets_url = f'https://docs.google.com/spreadsheets/d/{spreadsheet_id}/edit#gid=0'
-
-          reporter = JiraReporter(
-              base_url='https://techsatudental.atlassian.net',
-              email=os.environ['JIRA_EMAIL'],
-              api_token=os.environ['JIRA_API_TOKEN'],
-          )
-          reporter.post_comment('${{ inputs.jira_ticket }}', results, sheets_url=sheets_url)
-          print(f'Commented on Jira (sheets_url={sheets_url})')
-          "
+          if-no-files-found: ignore
 
       - name: Commit results to repo
+        if: always()
         run: |
           DATE=$(date +%Y-%m-%d)
-          RUN_ID="${{ needs.phase2-execute.outputs.run_id }}"
-          mkdir -p "results/${DATE}/${RUN_ID}"
-          cp results/${{ inputs.jira_ticket }}-results.json "results/${DATE}/${RUN_ID}/" 2>/dev/null || true
-          cp results/${{ inputs.jira_ticket }}-summary.md "results/${DATE}/${RUN_ID}/" 2>/dev/null || true
-          cp test_cases/${{ inputs.jira_ticket }}.yaml "test_cases/" 2>/dev/null || true
           git config user.name "QA Bot"
           git config user.email "qa-bot@satudental.com"
-          git add test_cases/ results/
+          git add test_cases/ results/ || true
           git commit -m "QA: ${{ inputs.jira_ticket }} - ${DATE}" || echo "No changes to commit"
           git push || echo "Push failed"
