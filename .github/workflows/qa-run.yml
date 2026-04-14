@@ -35,6 +35,20 @@ jobs:
           token: ${{ secrets.BE_REPO_TOKEN }}
           path: be-repo
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python dependencies
+        run: pip install requests
+
+      - name: Fetch Jira ticket context
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+        run: python scripts/fetch_jira_context.py ${{ inputs.jira_ticket }}
+
       - name: Setup Node.js (for Claude Code)
         uses: actions/setup-node@v4
         with:
@@ -55,6 +69,10 @@ jobs:
           Read CLAUDE.md for full context about the application, staging environment,
           auth flow, YAML schema, and test case generation guidelines.
 
+          Read the Jira ticket context at ./jira_context/${{ inputs.jira_ticket }}.md
+          for the ticket description, acceptance criteria, implementation details,
+          and any existing QA spreadsheet links from comments.
+
           Read the BE repo at ./be-repo/ for Swagger docs, codebase, and PR diff.
 
           Generate test cases and write them to test_cases/${{ inputs.jira_ticket }}.yaml
@@ -72,8 +90,14 @@ jobs:
           name: test-cases
           path: test_cases/${{ inputs.jira_ticket }}.yaml
 
+      - name: Upload Jira context artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jira-context
+          path: jira_context/
+
   phase2-execute:
-    name: "Phase 2: Execute Tests (Playwright)"
+    name: "Phase 2: Execute Tests (pytest)"
     needs: phase1-generate
     runs-on: ubuntu-latest
     steps:
@@ -143,6 +167,13 @@ jobs:
           name: test-results
           path: results/
 
+      - name: Download Jira context
+        uses: actions/download-artifact@v4
+        with:
+          name: jira-context
+          path: jira_context/
+        continue-on-error: true
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -152,10 +183,10 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Upload to Google Sheets
-        if: env.GOOGLE_SERVICE_ACCOUNT_KEY != ''
+        if: env.SHEETS_WEBAPP_URL != ''
         env:
-          GOOGLE_SERVICE_ACCOUNT_KEY: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_KEY }}
-          QA_SPREADSHEET_ID: ${{ secrets.QA_SPREADSHEET_ID }}
+          SHEETS_WEBAPP_URL: ${{ secrets.SHEETS_WEBAPP_URL }}
+          SHEETS_WEBAPP_TOKEN: ${{ secrets.SHEETS_WEBAPP_TOKEN }}
         run: |
           python -c "
           import json, os, sys
@@ -163,11 +194,11 @@ jobs:
           from lib.sheets_reporter import SheetsReporter
           results = json.load(open('results/${{ inputs.jira_ticket }}-results.json'))
           reporter = SheetsReporter(
-              spreadsheet_id=os.environ['QA_SPREADSHEET_ID'],
-              credentials_json=os.environ['GOOGLE_SERVICE_ACCOUNT_KEY'],
+              webapp_url=os.environ['SHEETS_WEBAPP_URL'],
+              secret_token=os.environ['SHEETS_WEBAPP_TOKEN'],
           )
-          reporter.upload(results, dev_pic='')
-          print('Uploaded to Google Sheets')
+          result = reporter.upload(results, dev_pic='')
+          print(f'Uploaded to Google Sheets: {result}')
           "
 
       - name: Comment on Jira
@@ -176,20 +207,36 @@ jobs:
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
           QA_SPREADSHEET_ID: ${{ secrets.QA_SPREADSHEET_ID }}
+          SHEETS_WEBAPP_URL: ${{ secrets.SHEETS_WEBAPP_URL }}
         run: |
           python -c "
-          import json, os, sys
+          import json, os, sys, glob
           sys.path.insert(0, '.')
           from lib.jira_reporter import JiraReporter
+
           results = json.load(open('results/${{ inputs.jira_ticket }}-results.json'))
-          sheets_url = f'https://docs.google.com/spreadsheets/d/{os.environ[\"QA_SPREADSHEET_ID\"]}'
+
+          # Try to find spreadsheet URL from Jira comments first
+          sheets_url = ''
+          urls_file = 'jira_context/${{ inputs.jira_ticket }}-spreadsheet-urls.json'
+          if os.path.exists(urls_file):
+              urls = json.load(open(urls_file))
+              if urls:
+                  sheets_url = urls[0]
+
+          # Fallback to default spreadsheet
+          if not sheets_url:
+              spreadsheet_id = os.environ.get('QA_SPREADSHEET_ID', '')
+              if spreadsheet_id:
+                  sheets_url = f'https://docs.google.com/spreadsheets/d/{spreadsheet_id}/edit#gid=0'
+
           reporter = JiraReporter(
               base_url='https://techsatudental.atlassian.net',
               email=os.environ['JIRA_EMAIL'],
               api_token=os.environ['JIRA_API_TOKEN'],
           )
           reporter.post_comment('${{ inputs.jira_ticket }}', results, sheets_url=sheets_url)
-          print('Commented on Jira')
+          print(f'Commented on Jira (sheets_url={sheets_url})')
           "
 
       - name: Commit results to repo

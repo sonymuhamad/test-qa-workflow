@@ -4,7 +4,6 @@ import json
 from lib.yaml_loader import load_test_cases, collect_all_test_cases
 from lib.evidence import EvidenceCapture, TestCaseResult
 from lib.results_writer import write_results_json, write_summary_markdown
-from lib.sheets_reporter import format_header_stats, format_test_case_row
 from lib.jira_reporter import format_comment
 
 
@@ -36,11 +35,7 @@ def test_full_pipeline_dry_run(tmp_path):
     assert json_path.endswith(".json")
     assert md_path.endswith(".md")
 
-    # 4. Format for sheets
-    header_rows = format_header_stats(results["summary"])
-    assert header_rows[0][2] == 5  # 5 passed
-
-    # 5. Format for Jira
+    # 4. Format for Jira
     comment = format_comment(results, sheets_url="https://sheets.example.com")
     assert "PASSED: 5" in comment
     assert "FAILED: 0" in comment

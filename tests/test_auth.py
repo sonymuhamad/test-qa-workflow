@@ -26,7 +26,7 @@ class TestAuthManager:
     def test_login_all_profiles(self, mock_post, auth_profiles, env_vars):
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {"data": {"token": "fake-token-123"}}
+        mock_response.json.return_value = {"data": {"access_token": "fake-token-123"}}
         mock_response.raise_for_status = MagicMock()
         mock_post.return_value = mock_response
 
@@ -39,10 +39,27 @@ class TestAuthManager:
         assert mock_post.call_count == 2
 
     @patch("lib.auth.httpx.post")
+    def test_login_skips_profiles_without_env_vars(self, mock_post, auth_profiles):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"data": {"access_token": "admin-token"}}
+        mock_response.raise_for_status = MagicMock()
+        mock_post.return_value = mock_response
+
+        with patch.dict("os.environ", {"QA_ADMIN_EMAIL": "admin@test.com", "QA_ADMIN_PASSWORD": "admin123"}, clear=False):
+            manager = AuthManager(base_url="http://localhost:8100", auth_profiles=auth_profiles)
+            manager.login_all()
+
+        assert manager.get_token("admin") == "admin-token"
+        assert mock_post.call_count == 1
+        headers = manager.get_headers("reader")
+        assert "_skip" in headers
+
+    @patch("lib.auth.httpx.post")
     def test_get_headers_with_auth(self, mock_post, auth_profiles, env_vars):
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {"data": {"token": "my-token"}}
+        mock_response.json.return_value = {"data": {"access_token": "my-token"}}
         mock_response.raise_for_status = MagicMock()
         mock_post.return_value = mock_response
 
@@ -62,6 +79,12 @@ class TestAuthManager:
         manager = AuthManager(base_url="http://localhost:8100", auth_profiles=auth_profiles)
         headers = manager.get_headers("invalid")
         assert headers["Authorization"] == "Bearer invalid-token"
+
+    def test_get_headers_unavailable_profile_returns_skip(self, auth_profiles):
+        manager = AuthManager(base_url="http://localhost:8100", auth_profiles=auth_profiles)
+        headers = manager.get_headers("reader")
+        assert "_skip" in headers
+        assert "reader" in headers["_skip"]
 
     def test_get_token_unknown_profile_raises(self, auth_profiles):
         manager = AuthManager(base_url="http://localhost:8100", auth_profiles=auth_profiles)

@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import patch, MagicMock
-from lib.sheets_reporter import SheetsReporter, format_header_stats, format_test_case_row
+from lib.sheets_reporter import SheetsReporter
 
 
 @pytest.fixture
@@ -35,54 +35,42 @@ def sample_results():
     }
 
 
-class TestFormatHeaderStats:
-    def test_formats_stats(self, sample_results):
-        rows = format_header_stats(sample_results["summary"])
-        assert rows[0] == ["PASS", "", 2]
-        assert rows[1] == ["FAILED", "", 1]
-        assert rows[2] == ["Number Of Test Case", "", 3]
-        assert rows[4] == ["Postponed", "", 0]
-
-    def test_defect_percentage(self, sample_results):
-        rows = format_header_stats(sample_results["summary"])
-        assert rows[5] == ["Staging Defect Percentage", "", "33.33%"]
-
-
-class TestFormatTestCaseRow:
-    def test_pass_row(self, sample_results):
-        tc = sample_results["test_cases"][0]
-        row = format_test_case_row(tc, dev_pic="Sony", testing_date="13/04/2026")
-        assert row[0] == 1
-        assert row[2] == "Basic GET"
-        assert row[5] == 200
-        assert row[8] == "PASS"
-        assert row[9] == "Sony"
-        assert row[10] == "Claude (automated)"
-
-    def test_fail_row(self, sample_results):
-        tc = sample_results["test_cases"][2]
-        row = format_test_case_row(tc, dev_pic="Sony", testing_date="13/04/2026")
-        assert row[8] == "FAILED"
-        assert "Expected status 400, got 200" in row[7]
-
-
 class TestSheetsReporter:
-    @patch("lib.sheets_reporter.build")
-    @patch("lib.sheets_reporter.service_account.Credentials.from_service_account_info")
-    def test_upload_creates_sheet_and_writes(self, mock_creds, mock_build, sample_results):
-        mock_service = MagicMock()
-        mock_build.return_value = mock_service
-        mock_sheets = mock_service.spreadsheets.return_value
-        mock_sheets.batchUpdate.return_value.execute.return_value = {
-            "replies": [{"addSheet": {"properties": {"sheetId": 12345}}}]
-        }
-        mock_sheets.values.return_value.update.return_value.execute.return_value = {}
+    @patch("lib.sheets_reporter.requests.post")
+    def test_upload_posts_to_webapp(self, mock_post, sample_results):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"status": "ok", "sheet": "SD-0000", "rows": 3}
+        mock_response.raise_for_status = MagicMock()
+        mock_post.return_value = mock_response
 
         reporter = SheetsReporter(
-            spreadsheet_id="fake-id",
-            credentials_json='{"type": "service_account"}',
+            webapp_url="https://script.google.com/macros/s/fake/exec",
+            secret_token="test-token",
         )
-        reporter.upload(sample_results, dev_pic="Sony")
+        result = reporter.upload(sample_results, dev_pic="Sony")
 
-        mock_sheets.batchUpdate.assert_called_once()
-        assert mock_sheets.values.return_value.update.call_count >= 1
+        mock_post.assert_called_once()
+        call_args = mock_post.call_args
+        assert call_args[0][0] == "https://script.google.com/macros/s/fake/exec"
+
+        payload = call_args[1]["json"]
+        assert payload["token"] == "test-token"
+        assert payload["ticket"] == "SD-0000"
+        assert payload["summary"]["total"] == 3
+        assert len(payload["test_cases"]) == 3
+        assert payload["dev_pic"] == "Sony"
+        assert result["status"] == "ok"
+
+    @patch("lib.sheets_reporter.requests.post")
+    def test_upload_raises_on_http_error(self, mock_post, sample_results):
+        mock_response = MagicMock()
+        mock_response.raise_for_status.side_effect = Exception("500 Server Error")
+        mock_post.return_value = mock_response
+
+        reporter = SheetsReporter(
+            webapp_url="https://script.google.com/macros/s/fake/exec",
+            secret_token="test-token",
+        )
+        with pytest.raises(Exception, match="500 Server Error"):
+            reporter.upload(sample_results)

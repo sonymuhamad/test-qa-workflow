@@ -10,3 +10,4 @@ venv/
 htmlcov/
 coverage.xml
 *.coverage
+jira_context/
